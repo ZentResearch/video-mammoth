@@ -1,0 +1,26 @@
+[project]
+name = "video-mammoth"
+version = "0.1.0"
+description = "Local video memory with timestamped subtitles and prompted frame embeddings"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "accelerate>=1.1.0",
+    "pillow>=12.3.0",
+    "qwen-vl-utils==0.0.14",
+    "sentence-transformers>=6.1.0",
+    "torch==2.11.0+cu130",
+    "torchcodec==0.17.0+cu130",
+    "torchvision==0.26.0+cu130",
+    "transformers>=5.19.0",
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+torchvision = { index = "pytorch-cu130" }
+torchcodec = { index = "pytorch-cu130" }
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
