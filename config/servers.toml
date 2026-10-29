@@ -1,0 +1,38 @@
+[vlm]
+model_id = "Qwen/Qwen3.5-2B"
+device = "cuda"
+dtype = "auto"               # auto, bf16, fp16
+attn_implementation = "sdpa"
+local_files_only = true
+# revision = "MODEL_REVISION"
+
+context_tokens = 8192
+min_image_pixels = 65536
+max_image_pixels = 262144
+max_images = 32
+max_messages = 64
+
+# Turn on native thinking with true. max_tokens covers thinking + final answer.
+enable_thinking = true
+max_thinking_tokens = 2048  # Ends earlier if the model finishes thinking naturally
+min_answer_tokens = 256    # Reserved within each request's total max_tokens
+default_max_tokens = 768
+max_output_tokens = 4096  # Server ceiling for each request
+default_temperature = 1.0
+top_p = 0.95
+top_k = 20
+
+[embeddings]
+model_id = "Qwen/Qwen3-VL-Embedding-2B"
+device = "cuda"
+dtype = "auto"
+attn_implementation = "sdpa"
+local_files_only = false
+# revision = "MODEL_REVISION"
+
+batch_size = 4                                      # GPU batch, not the HTTP request batch
+min_pixels = 4096
+max_pixels = 1048576
+max_input_tokens = 8192
+max_request_items = 64
+default_instruction = "Represent the user's input."
