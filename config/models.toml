@@ -1,0 +1,28 @@
+[vlm]
+base_url = "http://127.0.0.1:8002/v1"
+model = "Qwen/Qwen3.5-2B"
+timeout_seconds = 120.0
+
+supports_images = true
+supports_schema = true
+supports_temperature = true
+
+max_output_tokens = 768
+token_limit_parameter = "max_tokens"
+temperature = 1.0
+
+
+[embeddings]
+base_url = "http://127.0.0.1:8001/v1"
+model = "Qwen/Qwen3-VL-Embedding-2B"
+timeout_seconds = 90.0
+
+supports_images = true
+input_format = "content"
+
+purpose_mode = "symmetric"
+instruction_field = "instruction"
+
+supports_dimensions = false
+expected_dimensions = 2048
+normalization = "l2"
