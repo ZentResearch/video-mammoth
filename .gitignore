@@ -1,7 +1,73 @@
+# Local environments and Python/tool caches
 .venv/
+venv/
 __pycache__/
 *.py[cod]
-data/
-memory/
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+.pyright/
+.uv-cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Credentials and local environment settings
+.env
+.env.*
+!.env.example
+.aws/
+
+# Local source data, indexes, and generated investigation output
+/data/
+/memory/
+/runs/
+/sampling-checks/
+/notebook-checks/
+
+# Video, audio, and subtitle files
 *.mp4
+*.mkv
+*.mov
+*.webm
+*.avi
+*.m4v
+*.mpeg
+*.mpg
+*.mp3
+*.wav
+*.flac
+*.ogg
+*.m4a
+*.aac
+*.opus
 *.srt
+*.vtt
+*.ass
+*.sub
+
+# Model weights, tensor/array artifacts, and downloaded archives
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.bin
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+
+# Build and frontend output
+build/
+dist/
+*.egg-info/
+node_modules/
+.next/
+.DS_Store
