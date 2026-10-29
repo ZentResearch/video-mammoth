@@ -88,8 +88,7 @@ Local indexing state starts empty: previous indexes, prepared frames, cached out
 
 ## Documentation
 
-- [System walkthrough](SYSTEM_WALKTHROUGH.md): the complete flow, function inputs/outputs, data types, diagrams, and a fictional example.
-- [Core implementation guide](CORE_IMPLEMENTATION_GUIDE.md): current milestones, configuration, verification status, and remaining work.
+- [Architecture and system walkthrough](SYSTEM_WALKTHROUGH.md): the standalone reference for agents and contributors, including the package map, complete flow, data types, configuration, persistence, verification status, current limits, and a fictional example.
 
 ## Local artifacts and Git
 

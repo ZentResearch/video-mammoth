@@ -1,6 +1,6 @@
-# Video Mammoth: understand the current system from beginning to end
+# Video Mammoth: architecture and system walkthrough
 
-This guide describes the code at the repository root, as inspected on **29 October 2026**. It explains the implemented system, including its current limits. The legacy application has been removed.
+This is the standalone architecture reference for the code at the repository root, as inspected on **29 October 2026**. It brings the system design, execution flow, configuration, persistence rules, verification status, and remaining work into one document. The legacy application and the separate implementation guide have been removed.
 
 The goal is to understand **what calls what, which objects move between those calls, and what each call produces**. You can then open an individual function and study its internals without losing your place in the whole system.
 
@@ -8,8 +8,11 @@ All video content, search results, model choices, and answers in the running exa
 
 ## How to read this guide
 
-Read sections **1–4** first to see the whole system. Then follow sections **5–17** in order. The function tables belong to the surrounding explanation: you do not need to open every helper immediately.
+For a first human walkthrough, read sections **1–4**, then follow sections **5–17** in order. The function tables belong to the surrounding explanation: you do not need to open every helper immediately.
 
+For an agent joining the repository, start with **section 0**, then use the linked sections for the part being changed. Sections **18–23** are the configuration, limits, data, code-location, and verification reference. The source code remains authoritative if it changes after this document.
+
+- [0. Agent orientation](#0-agent-orientation)
 - [1. The three jobs](#1-the-three-jobs)
 - [2. The packages and processes](#2-the-packages-and-processes)
 - [3. Our invented video and its data](#3-our-invented-video-and-its-data)
@@ -32,6 +35,86 @@ Read sections **1–4** first to see the whole system. Then follow sections **5�
 - [20. What is saved, and what remains to test](#20-what-is-saved-and-what-remains-to-test)
 - [21. A map of the data types](#21-a-map-of-the-data-types)
 - [22. Where to go deeper in the code](#22-where-to-go-deeper-in-the-code)
+- [23. Verification status and next work](#23-verification-status-and-next-work)
+
+## 0. Agent orientation
+
+### What exists today
+
+Video Mammoth is a Python/UV research workspace. It answers questions about a video by searching instruction-guided image/text vectors, reading the original sampled images and supplied subtitles, and using one VLM to manage an investigation. The same VLM also builds navigation summaries, rewrites initial searches, and reviews proposed answers.
+
+There are **four installed workspace packages**. Their distribution names and import names differ:
+
+| Directory | UV package name | Python import | Owns |
+| --- | --- | --- | --- |
+| `packages/core/` | `video-mammoth-core` | `video_mammoth_core` | Preparation, indexing, storage, retrieval, investigation. |
+| `packages/model-clients/` | `video-mammoth-models` | `video_mammoth_models` | Common model contracts and compatible HTTP clients. |
+| `model-servers/embedding/` | `video-mammoth-embedding-server` | `video_mammoth_embedding_server` | Local embedding inference service. |
+| `model-servers/vlm/` | `video-mammoth-vlm-server` | `video_mammoth_vlm_server` | Local VLM inference service and optional local token counter. |
+
+The root project is a UV workspace with `package = false`; it is not a fifth application package. `apps/api/`, `apps/cli/`, `apps/web/`, and `tests/` contain placeholders. There is no implemented application HTTP API, CLI command, web interface, or maintained test suite. The two **model HTTP APIs** are implemented and separate from the future application API.
+
+### Find the owning module
+
+All core paths below are inside `packages/core/src/video_mammoth_core/`:
+
+```text
+contracts.py                 Shared typed records, actions, budgets, notebook state
+media/
+  video.py                   Probe metadata and sample/save frames
+  subtitles.py               Read original SRT cues
+indexing/
+  prepare.py                 Coordinate preparation
+  segments.py                Fixed clips, overlapping cues, neighbors
+  embed.py                   Coordinate embedding batches
+storage/
+  prepared.py                Preparation manifest and source validation
+  embeddings.py              Chunk writer, collection metadata, lazy vector reader
+retrieval/
+  search.py                  One query vector → source scores → candidate clips
+investigation/
+  coordinator.py             Whole investigation, action dispatch, stopping, result
+  outline.py                 Cached subtitle outline and bounded overview
+  planning.py                Original question plus generated search variants
+  context.py                 System prompt and bounded decision request
+  evidence.py                Read original sources into fitting pages
+  tools.py                   Execute follow-up search and evidence/notebook actions
+  notebook.py                Current notes, action journal, snapshot recovery
+  review.py                  Re-read cited originals and assess answer support
+  budget.py                  Request checks, token-count cache, limit exceptions
+```
+
+In `video_mammoth_models`, start with `contracts.py`, `config.py`, and `factory.py`; then follow `vlm.py` or `embeddings.py`. `content.py` serializes image/text content and `errors.py` defines common failures. Each model server has `app.py`, `config.py`, and `runtime.py`; the VLM server also has `counting.py` and `structured.py`.
+
+Core calls the client protocols. It does not import either local runtime or own model weights. A caller can choose `LocalTokenCounter` from the VLM server package, but core accepts any suitable `GenerationRequest → int` callable. Local model inference is reached through HTTP, not by calling the server runtime from core.
+
+### Start at the coordinating call
+
+| Task | Start here | Main handoff | Read next |
+| --- | --- | --- | --- |
+| New video and SRT | [probe_video()][video.probe_video] → [prepare_video()][prepare.prepare_video] | `VideoInfo` and sample times → `PreparedEvidence`, PNGs, manifest | [Preparation](#5-preparing-video-and-subtitles) |
+| Build vectors | [embed_prepared()][embed.embed_prepared] | Evidence + embedding client + prompts → saved `EmbeddingCollection` | [Indexing](#6-making-and-saving-embeddings) |
+| Reuse an index | [load_prepared()][prepared.load_prepared] → [open_embeddings()][store.open_embeddings] | Directories → evidence catalog and lazy `EmbeddingStore` | [Reloading](#7-reopening-the-saved-material) |
+| One search | [search_index()][search.search_index] | `SearchRequest` → ranked `SearchResult` with source matches | [Retrieval](#10-turning-a-query-into-ranked-clips) |
+| Answer a question | [investigate()][coordinator.investigate] | Question + evidence/store/clients/budgets → saved outcome dictionary | [Coordinator inputs](#8-entering-the-investigator) |
+| Start local inference | Each server's `app.create_app()` | Settings → resident runtime → HTTP inference | [Model services](#18-the-model-clients-and-local-servers) |
+
+These calls are connected by a caller today; there is no hidden video-to-answer launcher. Preparation needs no model server. Indexing needs only the embedder. Investigation needs the embedder and VLM. Keeping servers running retains their weights; keeping clients open retains HTTP connections.
+
+### Behavior that defines the current design
+
+1. **Clips are references, not cut video files.** Windows are fixed, at most 30 seconds, and include their start but exclude their end. Frame membership uses requested sample time; actual decoded time is retained separately.
+2. **Cues keep their identity and full text.** Every overlapping clip references the same cue ID. Each referenced cue gets one vector per collection, even if it overlaps several clips. Identical text under different cue IDs is still different source material.
+3. **Visual channels are configurable instructions.** Every frame gets one vector per configured perspective. OCR is an embedding perspective, not a separate OCR-text extraction stage. There is no per-clip transcript vector.
+4. **One search makes one query vector.** Its instruction and selected channels are independent. Initial searches use general/all-channel settings; follow-up searches can change either. Matching a shared cue makes all referencing clips candidates.
+5. **Retrieval is navigation, not proof.** Opening original sources is a separate action. Outline text, vector scores, and notebook hypotheses do not become original evidence merely by entering the prompt.
+6. **The model requests; Python executes.** One decision returns an `ActionRequest` JSON object. The schema and explicit dispatcher implement tool use; provider-native `tool_calls` are not used.
+7. **Memory is explicit and bounded in the prompt.** Selected note previews, candidate summaries, and the latest result/evidence enter the next request. The full journal stays on disk. The VLM server holds weights, not a persistent investigation conversation.
+8. **Reading and delivery are separate.** A read prepares page metadata; the next decision request attaches original content. Full-cue presentation is tracked by character coverage. Review then re-reads cited originals before accepting completion.
+9. **Limits are independent.** Clip duration, page size, token allowance, steps, total VLM calls, elapsed time, and no-progress stopping solve different problems. The first reached run limit can end an investigation even when other allowances remain.
+10. **Identity binds saved artifacts.** Preparation, collection, and run IDs prevent mixing unrelated data. Saved vectors include exact instructions and available model metadata; matching dimensions alone does not establish a compatible embedding space.
+
+See [section 20](#20-what-is-saved-and-what-remains-to-test) for current gaps, including review scope and incomplete resume support. See [section 23](#23-verification-status-and-next-work) before treating an implemented path as fully tested.
 
 ## 1. The three jobs
 
@@ -1317,6 +1400,45 @@ The three configuration files control different things:
 
 These files are not automatically synchronized by HTTP. The caller's token counter and budgets should agree with the server's actual processor/settings. Changing an embedding model or document instruction requires a compatible new collection; an unrelated embedding model cannot safely search old vectors just because dimensions match.
 
+### Run the workspace and services
+
+The workspace requires Python 3.13 or newer. The checked-in UV configuration selects CUDA 13.0 builds of Torch/TorchCodec. Current local inference runtimes require CUDA; preparation also uses CUDA video decoding and needs `ffprobe` on the executable path. Source video/SRT files are caller-supplied; the system does not download a video or generate its subtitles.
+
+Run from the repository root:
+
+```bash
+uv sync --all-packages --locked
+```
+
+Start each required service in its own terminal:
+
+```bash
+uv run --package video-mammoth-embedding-server uvicorn video_mammoth_embedding_server.app:create_app --factory --host 127.0.0.1 --port 8001
+```
+
+```bash
+uv run --package video-mammoth-vlm-server uvicorn video_mammoth_vlm_server.app:create_app --factory --host 127.0.0.1 --port 8002
+```
+
+`GET /health` on each port reports its model and loaded settings. The VLM health response additionally reports busy/ready and JSON Schema support. The embedding health response reports ready; its inference lock serializes requests rather than exposing a busy health state. These are inference endpoints, not job status endpoints for preparation or investigations.
+
+Server settings are selected in this order: explicit `create_app(config_path=...)`, then `VIDEO_MAMMOTH_SERVER_CONFIG`, then the workspace's `config/servers.toml`. Each service reads its own TOML section at startup. Restart that service to load changed settings. Client profiles and embedding prompts are loaded when their explicit loader functions are called; editing those files does not mutate existing objects.
+
+Current **TOML values** are listed below. They are configuration choices, not architectural constants; class defaults can differ when a different settings file omits a field.
+
+| Boundary | Current configuration |
+| --- | --- |
+| VLM client | `http://127.0.0.1:8002/v1`, `Qwen/Qwen3.5-2B`, 120-second request timeout, images/schema/temperature supported. |
+| Embedding client | `http://127.0.0.1:8001/v1`, `Qwen/Qwen3-VL-Embedding-2B`, 90-second timeout, multimodal `content` input, explicit `instruction`, symmetric purpose mode, expected 2048 dimensions, L2 normalization. |
+| VLM runtime | CUDA, auto dtype, SDPA, cached model files required; 8192 context tokens, 32 images and 64 messages maximum, 65,536–262,144 image preprocessing pixels. |
+| VLM generation | Thinking enabled, up to 2048 thinking tokens, at least 256 final-answer tokens reserved, default total output 768, ceiling 4096; temperature 1.0, `top_p=0.95`, `top_k=20`. |
+| Embedding runtime | CUDA, auto dtype, SDPA, model downloads allowed if absent; GPU batch 4, at most 64 request items, 8192 input tokens per item, 4096–1,048,576 preprocessing pixels. |
+| Embedding perspectives | `ocr`, `objects`, `attributes`, `relationships`, `scene_actions`, plus subtitle cue indexing/query instructions. |
+
+Neither current local client profile names an API key environment variable. For an external endpoint, `api_key_env` selects the variable to resolve. The factory does not automatically read a `.env` file: the caller or launcher must make variables available in the environment. Do not put keys into saved prompts, notebooks, or committed configuration.
+
+The caller must also choose the per-request `RequestBudget`, `max_steps`, run/output paths, `general_instruction`, token counter, and outline cache identity. These are not automatically read from `models.toml` by `investigate()`. For a local VLM, build the counter from the same loaded server settings. Supply model/revision and relevant inference settings in `outline_cache_identity`; the cache key cannot infer settings the caller leaves out.
+
 ### The embedding client path
 
 ```text
@@ -1335,6 +1457,8 @@ EmbeddingRequest
 - `_result()` rejects missing/duplicate output indices, wrong dimensions, and inconsistent vectors. It reattaches the application's IDs and calls `validate_for()` to confirm order matches the request.
 
 For current Qwen settings, `purpose_mode="symmetric"` means the client does not add an `input_type` field. It does **not** mean query and document instructions must be identical. The explicit `instruction` is still sent because `instruction_field="instruction"` is configured.
+
+Named search styles use the query instructions stored in the opened collection's `metadata.prompts`; search does not reload `embedding_prompts.toml`. Editing that file alone does not change the recipe of an existing collection. A custom `SearchRequest.instruction` overrides the named style for that query without rewriting document vectors.
 
 With a provider that expects `input_type`, that mode maps purpose to `search_query` or `search_document`. This is endpoint format adaptation. The current local server accepts both values but uses the same Qwen prompt path, with the supplied instruction controlling the specific representation.
 
@@ -1395,6 +1519,8 @@ Both runtimes select inference dtype from settings, require CUDA, and release mo
 ### Thinking and structured JSON
 
 The current server TOML enables thinking. Its maximum thinking allowance is 2048 tokens, minimum answer reservation is 256 tokens, and maximum request output ceiling is 4096 tokens. A caller's smaller output request still takes precedence over that ceiling.
+
+With current thinking settings, requests below 258 output tokens are rejected: the runtime requires space for the answer reserve plus thinking/closing overhead. A 768-token request does not gain a separate 2048-token thinking allowance. Both thinking and the final answer must fit inside that request's 768-token total; a larger allowance must be requested explicitly, within the server ceiling and full context budget.
 
 `_ThinkingBudget` ends the thinking phase when its allowance is reached, while reserving answer space. Thinking may also finish naturally earlier. Total output usage counts generated thinking and final-answer tokens together; the response text contains only the final answer portion.
 
@@ -1474,6 +1600,8 @@ More action steps can let the model read more evidence pages. They cannot make a
 
 Prepared/embedding/outline identities prevent accidental cross-use of unrelated artifacts. They do not provide a multi-user database transaction system. The notebook uses guarded saves; the current coordinator is intended to own one run's writes.
 
+An elapsed-time timeout can stop the caller while steps or VLM-call allowance remain. It does not shut down the model servers, and cancelling an HTTP wait does not guarantee immediate cancellation of generation already running in the separate server process.
+
 ## 20. What is saved, and what remains to test
 
 Here is an illustrative directory arrangement. Callers choose directory names; core writes the named artifact files within them. The current checkout starts without generated indexes or notebook/run data; these files will be created by new preparation, indexing, and investigation calls.
@@ -1497,6 +1625,10 @@ memory/filter-example/
     reviews.jsonl                   # Actual review-attempt/page events, when review occurred
     result.json                     # Completed or incomplete final outcome
 ```
+
+The manifest stores relative frame paths, but source video/SRT identities retain their resolved paths, sizes, and modification times. Those identities are file-stat checks, not source-content hashes. Original input files are not copied into the preparation. Each vector chunk separately has a SHA-256 checksum in collection metadata and contains an `int64` `frame_ids` or `cue_ids` tensor plus a `float32` `vectors` matrix; source text, paths, and times remain in the preparation catalog.
+
+Source media, `data/`, `memory/`, `runs/`, model weights, vector files, environments, caches, and credentials are ignored by Git. Source code, TOML settings, `pyproject.toml`, `uv.lock`, and this document are tracked. Preparation and embedding publication require new output directories; they do not silently overwrite a collection. A caller selects paths rather than relying on one hardcoded video folder.
 
 ### What the implementation currently makes possible
 
@@ -1652,6 +1784,47 @@ The source links below target the inspected definitions. Line numbers are naviga
 | VLM settings/counter | [VLMSettings][vlm_config.VLMSettings], [load_settings()][vlm_config.load_settings], [LocalTokenCounter][counting.LocalTokenCounter]. Validate settings, load configured section, count processed request input without loading model weights. |
 
 The useful reading question is always: **“Which box am I inside, what data came into it, and which box receives its output?”** The coordinating functions keep that path visible; the helpers implement the individual jobs along it.
+
+## 23. Verification status and next work
+
+### Implemented does not mean fully evaluated
+
+This table records prior checks and current code coverage. It is not a claim that GPU inference was repeated while writing this document. Earlier temporary checks are not retained as a maintained test suite.
+
+| Area | Evidence so far | Still unverified or deferred |
+| --- | --- | --- |
+| Preparation | Live frame sampling and manifest reload have passed; fixed windows/shared cues have also been checked with fixtures. | Broader subtitle alignment and difficult media inputs. |
+| Embedding and storage | A previous live collection saved/reloaded 2698 vectors: 449 frames × 5 channels + 453 referenced cues, 2048 dimensions, six float32 `.pt` chunks. | Performance tuning; that run took at least 20 minutes by the user's report. The collection was deleted during cleanup. |
+| Search | Live general/all-channel, OCR/all-channel, and OCR/OCR-only requests returned ranked clips and source matches. | Systematic relevance evaluation and cross-channel score behavior. |
+| VLM endpoint | Live image generation and repeated structured search-planning requests completed with the configured Qwen VLM. | Sustained generation quality through a whole investigation. |
+| Investigation tools and persistence | Focused offline checks covered evidence pages, unchanged image bytes, cue continuations, source eligibility, note writes/reload, journal recovery, review acceptance/rejection, and stopping/error paths. | Full live question → evidence inspection → follow-up → answer review → saved outcome. |
+| Whole workspace | Root migration checks passed imports, default configuration resolution, source formatting, and an offline fixture workflow through preparation, storage, search, investigation, review, and finished-run reload. | A repeatable maintained suite in `tests/`. |
+| Long videos | Chunked writes/reads and bounded tensor caching are implemented. | Representative 10-hour throughput and total-memory measurements. |
+
+### Next verification: one complete live investigation
+
+Use a small caller around the existing public entry points; no application UI is needed for this check:
+
+1. Prepare and index a fresh video/SRT pair, then reload both artifacts. There is no existing collection to assume is present after cleanup.
+2. Start both local model services. Match the caller's token counter, context/output budget, and outline cache identity to the loaded VLM settings.
+3. Call `investigate()` with a new run directory and a question whose supporting originals can be checked by a person. Inspect the saved actions and delivered evidence, not just the final prose.
+4. Check that cited frame/cue IDs resolve to the right originals/timestamps and that `request_finish` triggered actual review before `status="completed"`. If the run ends incomplete, inspect the reason, proposal, gaps, and pending sources.
+5. Exercise a follow-up search, a cue shared by two clips, a continuation page, an unsupported proposal that returns to investigation, and an exhausted limit. These need not all occur in one model run.
+
+Keep deterministic storage/budget/provenance checks separate from model-quality evaluation. A fake VLM can prove that a branch is wired correctly; it cannot prove that the real VLM will choose that branch or interpret the evidence correctly.
+
+### Extension points after verification
+
+| Future change | Existing boundary to build on | Parts to check together |
+| --- | --- | --- |
+| Application API, CLI, web UI | The public core functions and model-client factory. The intended application API can serve both interfaces; those interfaces are not implemented yet. | Shared job lifecycle, paths/configuration, progress reporting, cancellation, and ownership of clients. |
+| Another model provider | `VLMClient` / `EmbeddingClient`, profiles, compatible adapters, caller-supplied token counter. | Payload capabilities, image handling, schema behavior, token accounting, and embedding-space compatibility. |
+| Different notebook/context selection | `build_decision_request()` and its note/candidate selectors; evidence IDs still resolve through `EvidenceReader`. | Page fit checks, source-delivery tracking, original-question preservation, and review eligibility. No extra decision model exists today. |
+| New visual perspective | `EmbeddingPrompts` → embedding iterator/writer → stored prompts → style resolution. | New collection coverage and query instructions; do not add another hardcoded channel list. |
+| Faster indexing or search | Sampling settings, request/GPU batch settings, writer/store chunks, `_score_chunks()`. | Measure each stage and preserve cue/frame identity, vector order, original evidence, and search results. |
+| Stronger review/resume | `review_answer()`, `_finish()`, notebook events, and coordinator-local state. | The limits in section 20: uncited contradictions, question-part coverage, unread work, and state not currently persisted for automatic continuation. |
+
+These are integration points and deferred work, not additional implemented modules. When changing the code, update the affected flow, contracts, configuration, and status in this same document so the next reader sees the current system rather than an old implementation plan.
 
 <!-- Source reference links: generated from inspected Python definitions. -->
 
