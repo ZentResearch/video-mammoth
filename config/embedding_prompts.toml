@@ -1,0 +1,27 @@
+subtitle_instruction = "Represent the meaning and specific details of this subtitle cue for retrieval."
+subtitle_query_instruction = "Retrieve subtitle cues containing the information requested by the search query."
+
+[[visual]]
+name = "ocr"
+instruction = "Represent the visible written text for retrieval. Focus on exact words, letters, numbers, labels, signs, and small text throughout the image."
+query_instruction = "Retrieve images containing the written words, numbers, or labels requested by the search query."
+
+[[visual]]
+name = "objects"
+instruction = "Represent the visible objects and people for retrieval, including small and less noticeable objects in the background."
+query_instruction = "Retrieve images containing the objects or people requested by the search query."
+
+[[visual]]
+name = "attributes"
+instruction = "Represent the visible attributes of objects and people for retrieval, including colors, shapes, materials, clothing, and object states."
+query_instruction = "Retrieve images containing the object attributes, appearance, or states requested by the search query."
+
+[[visual]]
+name = "relationships"
+instruction = "Represent visible spatial relationships and interactions for retrieval: who is holding or using what, and which objects are beside, above, below, or inside others."
+query_instruction = "Retrieve images showing the spatial relationships or interactions requested by the search query."
+
+[[visual]]
+name = "scene_actions"
+instruction = "Represent the overall environment and visible activities for retrieval. Describe only actions supported by this image rather than inventing motion or event order."
+query_instruction = "Retrieve images showing the environment or visible activity requested by the search query."
