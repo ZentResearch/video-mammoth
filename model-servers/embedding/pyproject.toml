@@ -1,0 +1,23 @@
+[project]
+name = "video-mammoth-embedding-server"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pydantic>=2.14,<3",
+    "sentence-transformers==6.1.0",
+    "transformers==5.19.0",
+    "torch==2.11.0+cu130",
+    "torchvision==0.26.0+cu130",
+    "pillow>=12.3,<14",
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+torchcodec = { index = "pytorch-cu130" }
+torchvision = { index = "pytorch-cu130" }
+
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14"]
+build-backend = "uv_build"

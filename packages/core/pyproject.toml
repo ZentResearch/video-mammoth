@@ -1,0 +1,19 @@
+[project]
+name = "video-mammoth-core"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "video-mammoth-models",
+    "pydantic>=2.14,<3",
+    "pillow>=12.3,<14",
+    "numpy>=2.1,<3",
+    "torch==2.11.0+cu130",
+    "torchcodec==0.17.0+cu130",
+]
+
+[tool.uv.sources]
+video-mammoth-models = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14"]
+build-backend = "uv_build"
